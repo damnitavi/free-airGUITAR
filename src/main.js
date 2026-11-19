@@ -235,6 +235,36 @@ function setCamState(kind, text) {
   els.camPill.querySelector('span').textContent = text
 }
 
+function releaseCamera() {
+  if (video) {
+    try {
+      video.pause()
+    } catch {
+      /* already detached */
+    }
+    video.srcObject = null
+  }
+  if (stream) {
+    for (const track of stream.getTracks()) track.stop()
+    stream = null
+  }
+  state.cameraOn = false
+}
+
+function cameraMessage(err) {
+  const name = err?.name || ''
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'permission denied — allow the camera in the address bar, then retry'
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') {
+    return 'the camera is busy in another tab or app — close it, then retry'
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return 'no camera found — plug one in, or continue without a camera'
+  }
+  return err?.message || 'permission denied'
+}
+
 async function startCamera() {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser has no camera API')
   if (!video) {
@@ -244,18 +274,26 @@ async function startCamera() {
     video.autoplay = true
     video.setAttribute('playsinline', '')
   }
+  releaseCamera()
   setCamState('wait', 'starting camera')
-  stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-    audio: false,
-  })
-  video.srcObject = stream
-  await video.play()
-  setCamState('wait', 'loading hand model')
-  if (!tracker) tracker = await createTracker()
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    })
+    video.srcObject = stream
+    await video.play()
+    setCamState('wait', 'loading hand model')
+    if (!tracker) tracker = await createTracker()
+  } catch (err) {
+    releaseCamera()
+    throw err
+  }
   state.cameraOn = true
   setCamState('on', 'tracking hands')
 }
+
+window.addEventListener('pagehide', releaseCamera)
 
 /* ------------------------------------------------------------------ *
  * Gestures
@@ -821,7 +859,7 @@ async function begin(withCamera) {
       els.startBtn.disabled = false
       els.startBtn.textContent = 'Retry camera'
       els.gateNote.textContent = `Camera unavailable — ${
-        err.message || 'permission denied'
+        cameraMessage(err)
       }. Keyboard works too: ← → root, 1–5 chord type, space strums, P picks a string.`
       return
     }
